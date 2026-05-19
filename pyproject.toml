@@ -27,6 +27,13 @@ dev = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+  "integration: FastAPI TestClient / 多模块协作（mock 外部）",
+  "local_model: 需要本地 BGE 模型，慢且依赖文件",
+  "llm: 需要真实 LLM API key",
+  "e2e: 端到端含爬虫与真 LLM",
+  "slow: 单个用例 > 5s",
+]
 
 [tool.ruff]
 line-length = 100

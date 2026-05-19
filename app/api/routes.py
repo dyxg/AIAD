@@ -33,6 +33,7 @@ from app.models.schemas import (
     VisionRunRequest,
 )
 from app.services.chroma_store import ChromaStore
+from app.services.comment_selector import enrich_with_priority_comments
 from app.services.context_agent import ContextAgent
 from app.services.copywriter import build_per_comment_prompt, parse_per_comment_result
 from app.services.copywriter_agent import CopywriterAgent
@@ -89,13 +90,16 @@ def _run_per_comment_background(task_id: str, processed_path: Path, settings: Se
     product_info = str(request_info.get("product_info", ""))
     target_style = str(request_info.get("target_style", "测评风"))
 
-    valid_comments = sorted(
-        [c for c in comment_table if isinstance(c, dict) and str(c.get("comment_text", "")).strip()],
-        key=lambda c: int(c.get("likes", 0) or 0),
-        reverse=True,
-    )
+    valid_comments = [
+        c
+        for c in current_payload.get("priority_comment_table", comment_table)
+        if isinstance(c, dict) and str(c.get("comment_text", "")).strip()
+    ]
     total = len(valid_comments)
-    batches = [valid_comments[i: i + _PER_COMMENT_BATCH_SIZE] for i in range(0, total, _PER_COMMENT_BATCH_SIZE)]
+    batches = [
+        valid_comments[i: i + _PER_COMMENT_BATCH_SIZE]
+        for i in range(0, total, _PER_COMMENT_BATCH_SIZE)
+    ]
     total_batches = len(batches)
     done_count = 0
 
@@ -114,7 +118,12 @@ def _run_per_comment_background(task_id: str, processed_path: Path, settings: Se
             fresh: dict[str, Any] = json.loads(processed_path.read_text(encoding="utf-8"))
             comment_ads: dict[str, str] = fresh.get("comment_ads") or {}
         except Exception as exc:
-            logger.error("逐评论后台读文件失败 task_id=%s batch=%d error=%s", task_id, batch_idx, exc)
+            logger.error(
+                "逐评论后台读文件失败 task_id=%s batch=%d error=%s",
+                task_id,
+                batch_idx,
+                exc,
+            )
             break
 
         try:
@@ -172,7 +181,12 @@ def _run_per_comment_background(task_id: str, processed_path: Path, settings: Se
     logger.info("逐评论后台任务完成 task_id=%s done=%d total=%d", task_id, done_count, total)
 
 
-def _run_pipeline_task(task_id: str, payload: RunRequest, settings: Settings, app_state: Any) -> None:
+def _run_pipeline_task(
+    task_id: str,
+    payload: RunRequest,
+    settings: Settings,
+    app_state: Any,
+) -> None:
     """
     后台管道任务。
 
@@ -243,8 +257,12 @@ def _run_pipeline_task(task_id: str, payload: RunRequest, settings: Settings, ap
                     is_inflight_owner = True
 
             if not is_inflight_owner and inflight_event is not None:
-                emit({"type": "progress", "stage": "waiting", "percent": 10,
-                      "message": f"同关键词正在抓取中，等待复用..."})
+                emit({
+                    "type": "progress",
+                    "stage": "waiting",
+                    "percent": 10,
+                    "message": "同关键词正在抓取中，等待复用...",
+                })
                 logger.info(
                     "关键词 in-flight，等待复用缓存 keyword=%s task_id=%s",
                     primary_keyword, task_id,
@@ -345,7 +363,12 @@ def _run_pipeline_task(task_id: str, payload: RunRequest, settings: Settings, ap
             return
 
         # === 4. 数据标准化 ===
-        emit({"type": "progress", "stage": "normalizing", "percent": 35, "message": "正在标准化数据..."})
+        emit({
+            "type": "progress",
+            "stage": "normalizing",
+            "percent": 35,
+            "message": "正在标准化数据...",
+        })
         normalized = normalize_dataset(
             platform=payload.platform,
             source_keyword=",".join(keywords),
@@ -354,6 +377,7 @@ def _run_pipeline_task(task_id: str, payload: RunRequest, settings: Settings, ap
             media_root_dir=media_root_dir,
             product_info=payload.ad_type,
         )
+        normalized = enrich_with_priority_comments(normalized)
 
         # 推送爬取摘要指标
         summary_data = normalized.get("summary", {})
@@ -367,7 +391,12 @@ def _run_pipeline_task(task_id: str, payload: RunRequest, settings: Settings, ap
         _emit_comments(normalized, emit)
 
         # === 5. LangGraph 工作流 ===
-        emit({"type": "progress", "stage": "analyzing", "percent": 45, "message": "AI 智能分析中..."})
+        emit({
+            "type": "progress",
+            "stage": "analyzing",
+            "percent": 45,
+            "message": "AI 智能分析中...",
+        })
         request_info = {
             "post_url": payload.post_url,
             "product_info": payload.product_info or payload.ad_type,
@@ -501,6 +530,9 @@ def _build_single_review_item(
     focus_map = {"positive": "种草转化", "neutral": "品牌曝光", "negative": "痛点回应"}
     note_id = comment.get("note_id", "")
     source_meta = content_map.get(note_id, {})
+    comment_like_count = int(
+        comment.get("comment_like_count", comment.get("like_count", comment.get("likes", 0))) or 0
+    )
 
     ad_text: str
     if comment_ads is None:
@@ -515,6 +547,7 @@ def _build_single_review_item(
 
     return {
         "comment_id": comment.get("comment_id") or f"{note_id}-{index}",
+        "note_id": str(note_id),
         "author": source_meta.get("author_name", "匿名用户"),
         "platform": "小红书",
         "source_text": text[:220],
@@ -522,6 +555,13 @@ def _build_single_review_item(
         "predicted_affinity": affinity_map.get(sentiment, 70),
         "focus": focus_map.get(sentiment, "品牌曝光"),
         "sentiment": sentiment,
+        "likes": comment_like_count,
+        "comment_like_count": comment_like_count,
+        "post_like_count": int(
+            comment.get("post_like_count", source_meta.get("like_count", 0)) or 0
+        ),
+        "selection_rank": int(comment.get("selection_rank", index + 1) or index + 1),
+        "selection_reason": comment.get("selection_reason", "优先评论"),
     }
 
 
@@ -535,8 +575,9 @@ def _build_review_queue(payload: dict[str, Any], limit: int = 50) -> list[dict[s
     # None 表示 SSE 实时阶段（管道未完成）；{} 表示 LLM 调用失败；非空 dict 表示正常结果
     raw_ads = payload.get("comment_ads")
     comment_ads: dict[str, str] | None = raw_ads if isinstance(raw_ads, dict) else None
+    comment_source = payload.get("priority_comment_table") or payload.get("comment_table", [])
     items: list[dict[str, Any]] = []
-    for index, comment in enumerate(payload.get("comment_table", [])):
+    for index, comment in enumerate(comment_source):
         if not isinstance(comment, dict):
             continue
         text = str(comment.get("comment_text", "")).strip()
@@ -549,8 +590,8 @@ def _build_review_queue(payload: dict[str, Any], limit: int = 50) -> list[dict[s
 
 
 def _emit_comments(normalized: dict[str, Any], emit: Any) -> None:
-    """normalize 后逐条 emit 评论事件（最多 50 条），让前端实时看到评论流入。"""
-    comment_table = normalized.get("comment_table", [])
+    """normalize 后逐条 emit 优先评论事件，让前端实时看到评论流入。"""
+    comment_table = normalized.get("priority_comment_table") or normalized.get("comment_table", [])
     content_map = {
         item.get("note_id", ""): item
         for item in normalized.get("content_table", [])
@@ -726,9 +767,11 @@ async def stream_task_events(
         # 任务已完成但客户端才连上（队列已清理或未创建）
         if event_q is None:
             if record.status == TaskStatus.SUCCESS:
-                yield f"data: {json.dumps({'type': 'done', 'task_id': task_id}, ensure_ascii=False)}\n\n"
+                event = {"type": "done", "task_id": task_id}
+                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
             elif record.status == TaskStatus.FAILED:
-                yield f"data: {json.dumps({'type': 'error', 'message': record.error_message or '任务失败'}, ensure_ascii=False)}\n\n"
+                event = {"type": "error", "message": record.error_message or "任务失败"}
+                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
             return
 
         try:
@@ -838,6 +881,7 @@ def get_task_insights(
     return {
         "task_id": task_id,
         "review_queue": review_queue,
+        "comment_selection_meta": payload.get("comment_selection_meta", {}),
         "comment_ads_status": result_meta.get("comment_ads_status", "pending"),
         "comment_ads_progress": {
             "done": int(result_meta.get("comment_ads_done", 0)),

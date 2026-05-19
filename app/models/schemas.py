@@ -127,6 +127,8 @@ class AnalyzeOutput(BaseModel):
     summary: dict[str, Any]
     content_table: list[dict[str, Any]]
     comment_table: list[dict[str, Any]]
+    priority_comment_table: list[dict[str, Any]] = Field(default_factory=list)
+    comment_selection_meta: dict[str, Any] = Field(default_factory=dict)
     feature_table: list[dict[str, Any]]
     vision_analysis: VisionAnalysis = Field(default_factory=VisionAnalysis)
     request_info: dict[str, Any] = Field(default_factory=dict)

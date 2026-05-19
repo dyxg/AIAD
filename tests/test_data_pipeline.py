@@ -5,6 +5,7 @@ import httpx
 
 from app.core.config import Settings
 from app.services.chroma_store import ChromaStore
+from app.services.comment_selector import enrich_with_priority_comments
 from app.services.llm_gateway import OpenAICompatibleGateway
 from app.services.normalize import normalize_dataset
 from app.services.state_builder import build_global_state
@@ -65,6 +66,7 @@ def test_data_pipeline_normalize_and_graph(tmp_path: Path) -> None:
         media_root_dir=media_root_dir,
         product_info="敏感肌修护精华",
     )
+    normalized = enrich_with_priority_comments(normalized)
     settings = Settings(
         project_root=tmp_path,
         aiad_python_exe=Path("/usr/bin/python3"),
@@ -90,6 +92,8 @@ def test_data_pipeline_normalize_and_graph(tmp_path: Path) -> None:
     assert output["summary"]["content_count"] == 1
     assert output["content_table"][0]["like_count"] == 12000
     assert output["comment_table"][0]["comment_id"] == "c1"
+    assert output["priority_comment_table"][0]["comment_id"] == "c1"
+    assert output["comment_selection_meta"]["selected_comments"] == 1
     assert "feature_table" in output
     assert output["vision_analysis"]["source_media_count"] == 1
     assert output["vision_analysis"]["model_provider"] == "mock"
@@ -117,6 +121,9 @@ def test_build_global_state_matches_doc_shape(tmp_path: Path) -> None:
             }
         ],
         "comment_table": [
+            {"comment_id": "c1", "comment_text": "求博主的防晒！", "like_count": 120}
+        ],
+        "priority_comment_table": [
             {"comment_id": "c1", "comment_text": "求博主的防晒！", "like_count": 120}
         ],
         "feature_table": [

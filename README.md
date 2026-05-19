@@ -193,6 +193,11 @@ client = OpenAI(
 - `GET /api/ad-intel/task/{task_id}/meta`
 - `GET /api/ad-intel/task/{task_id}/insights`
 
+`/insights` 会返回后端筛选后的评论审核队列。任务3以后，系统保留原始 `comment_table`，
+同时新增 `priority_comment_table` 和 `comment_selection_meta`：后端优先选择高点赞帖子中的高点赞评论，
+并尽量每个帖子先只选一条评论。现有 `/run` 主流程仍保留 MediaCrawler 调用能力；
+任务3的自动化测试不启动 MediaCrawler。前端只展示并刷新该优先队列，不发送真实评论，只提供 AI 文案复制。
+
 ### Agent 联调
 
 - `GET /api/ad-intel/agents/state-schema`

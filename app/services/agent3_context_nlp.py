@@ -1,13 +1,19 @@
 from __future__ import annotations
 
+import importlib
 import json
 import logging
+from types import ModuleType
 from typing import Any
 
-try:
-    from openai import OpenAI
-except ImportError:  # pragma: no cover - 运行环境可选依赖
-    OpenAI = None  # type: ignore[assignment]
+def _load_openai_module() -> ModuleType | None:
+    try:
+        return importlib.import_module("openai")
+    except ImportError:  # pragma: no cover - 运行环境可选依赖
+        return None
+
+
+openai_module = _load_openai_module()
 
 from app.core.config import Settings
 
@@ -19,18 +25,18 @@ class ContextNLPAgent:
 
     def __init__(self, settings: Settings):
         self.settings = settings
+        self.client: Any | None = None
         llm_provider = settings.llm_provider.strip().lower()
         if llm_provider in {"", "disabled", "none", "null"} or not settings.llm_api_key.strip():
-            self.client = None
             self.model = settings.llm_model
             logger.warning("Agent3 未启用远程 LLM（provider 或 api_key 未配置），将使用默认语境输出")
             return
         self.client = (
-            OpenAI(
+            openai_module.OpenAI(
                 base_url=settings.llm_base_url,
                 api_key=settings.llm_api_key,
             )
-            if OpenAI is not None
+            if openai_module is not None
             else None
         )
         self.model = settings.llm_model

@@ -163,6 +163,8 @@ def _package_output(state: DataState) -> DataState:
         "summary": state["normalized"]["summary"],
         "content_table": state["normalized"]["content_table"],
         "comment_table": state["normalized"]["comment_table"],
+        "priority_comment_table": state["normalized"].get("priority_comment_table", []),
+        "comment_selection_meta": state["normalized"].get("comment_selection_meta", {}),
         "feature_table": state["normalized"]["feature_table"],
         "vision_analysis": vision_analysis,
         "nlp_analysis": nlp_analysis,

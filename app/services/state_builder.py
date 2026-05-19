@@ -119,7 +119,7 @@ def build_global_state(
 ) -> dict[str, Any]:
     """将当前工程数据映射为文档约定的 Global State。"""
     content_table = normalized.get("content_table", [])
-    comment_table = normalized.get("comment_table", [])
+    comment_table = normalized.get("priority_comment_table") or normalized.get("comment_table", [])
     feature_table = normalized.get("feature_table", [])
     top_content = content_table[0] if content_table else {}
     post_url = str(request_info.get("post_url", "") or top_content.get("note_url", ""))
